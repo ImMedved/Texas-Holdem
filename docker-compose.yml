@@ -1,0 +1,8 @@
+version: "3.8"
+services:
+  holdem:
+    build: .
+    container_name: holdem
+    restart: always
+    ports:
+      - "8081:8080"
