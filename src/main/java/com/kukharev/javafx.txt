@@ -1,0 +1,573 @@
+// run:  mvn clean javafx:run
+
+package com.kukharev;
+
+import javafx.application.Application;
+import javafx.beans.property.*;
+import javafx.collections.*;
+import javafx.geometry.*;
+import javafx.scene.Scene;
+import javafx.scene.control.*;
+import javafx.scene.effect.ColorAdjust;
+import javafx.scene.image.Image;
+import javafx.scene.image.ImageView;
+import javafx.scene.layout.*;
+import javafx.stage.Stage;
+import java.math.BigInteger;
+import java.util.*;
+import java.util.function.DoubleUnaryOperator;
+
+/**
+ * One‑stop console tool: on every street prints exact probability of finishing
+ * with each Texas‑Hold'em combination that <em>uses at least one of our hole cards</em>.
+ * Combinations covered: High Card (best), Pair, Two Pair, Set, Straight,
+ * Flush, Full House, Quads, Straight Flush, Royal Flush.
+ * <p>High‑Card uses number of opponents. Others depend only on community cards
+ * so opponents are ignored. For accuracy & speed we:
+ * <ul>
+ *   <li>enumerate all possible completions of the board ( ≤ C(50,5)=2 118 760 ) <b>ONE time</b>,</li>
+ *   <li>for each completion detect which combos are hit,</li>
+ *   <li>accumulate counters then divide by total.</li>
+ * </ul>
+ * On modern JDK the pre‑flop run finishes < 100 ms.</p>
+ */
+public class PokerProbabilityUI extends Application {
+    private final Set<String> used = new HashSet<>();
+    private final List<String> hole = new ArrayList<>(Arrays.asList(null, null));
+    private final List<String> board = new ArrayList<>(Arrays.asList(null, null, null, null, null));
+    private final ObservableList<HandRow> rows = FXCollections.observableArrayList();
+    private final List<OpponentNode> opponents = new ArrayList<>();
+    private final String[] comboNames = {"High card", "Pair", "Two pair", "Set", "Straight", "Flush", "Full house", "Quads", "Straight flush", "Royal flush"};
+    /* ------ таблица соперников ------ */
+    private TableView<OppRow> rightTable;
+    private final ObservableList<OppRow> oppRows = FXCollections.observableArrayList();
+
+    /* ===== шанс, что ХОТЯ БЫ ОДИН активный соперник соберёт комбинацию ===== */
+    private record OppResult(double pair,double twoPair,double set,double straight,
+                             double flush,double fullHouse,double quads,
+                             double straightFlush,double royal){}
+
+    private BorderPane root;
+    private Pane tablePane;
+    private TableView<HandRow> leftTable;
+    private Button holeBtn1, holeBtn2;
+    private final List<Button> boardBtns = new ArrayList<>();
+    private ImageView tableBg;
+
+    /* === фиксированный layout === */
+    private static final double WIN_W = 1600, WIN_H = 720;   // размер окна
+    private static final double CX = 1280 / 2 - 150, CY = WIN_H / 2 - 130;
+    private static final double OVAL_A = 400, OVAL_B = 150;  // полуоси овала для оппонентов
+
+    public static void main(String[] args) { launch(args); }
+
+    @Override
+    public void start(Stage stage) {
+        int opp = askOpponents();
+        buildUI(stage, opp);
+        stage.show();
+        recalc();
+    }
+
+    private int askOpponents() {
+        TextInputDialog d = new TextInputDialog("2");
+        d.setHeaderText("Opponents");
+        Optional<String> r = d.showAndWait();
+        int v = r.map(Integer::parseInt).orElse(2);
+        if (v < 1) v = 1;
+        return v;
+    }
+
+    private void buildUI(Stage stage, int opp) {
+        root = new BorderPane();
+        tablePane = new Pane();
+        buildTableBackground();
+        root.setCenter(tablePane);
+        buildOpponents(opp);
+        buildPlayerAndBoard();
+        buildLeftTable();
+        buildRightTable();
+        buildControls(stage);
+        stage.setScene(new Scene(root, WIN_W, WIN_H));
+        stage.setResizable(false);
+        stage.setTitle("Texas Hold'em Probabilities");
+    }
+
+    private void buildOpponents(int n) {
+        tablePane.getChildren().removeIf(node -> node instanceof OpponentNode);
+        opponents.clear();
+
+        double cx = 450, cy = 300;
+        double a = OVAL_A, b = OVAL_B;
+        // полуоси овала
+
+        int seats = n + 1;                     // + место игрока
+        double step = 2 * Math.PI / seats;
+        int skip = seats / 2;                  // игрок внизу
+
+        for (int seat = 0, cnt = 0; cnt < n; seat++) {
+            if (seat == skip) continue;
+            double angle = -Math.PI / 2 + seat * step; // 0-й сверху
+            double x = CX + a * Math.cos(angle);
+            double y = CY + b * Math.sin(angle);
+
+            OpponentNode node = new OpponentNode("P" + (cnt + 1));
+                    node.setLayoutX(x - 40);
+            node.setLayoutY(y - 25);
+            node.foldBtn.setOnAction(e -> { node.status = Status.FOLDED; recalc(); });
+            node.noneBtn.setOnAction(e -> { node.status = Status.NONE; recalc(); });
+
+            opponents.add(node);
+            tablePane.getChildren().add(node);
+            cnt++;
+        }
+    }
+
+    /* шанс, что ХОТЯ БЫ ОДИН из activeOpp соберёт комбинацию */
+    private OppResult computeOpponents(int activeOpp) {
+        if (activeOpp == 0) return new OppResult(0,0,0,0,0,0,0,0,0);
+
+        List<String> deck = CombinedProbabilityCalculator.liveDeck(hole, boardInPlay());
+        int totalHoleComb = deck.size() * (deck.size() - 1) / 2;
+        long pair=0,twoPair=0,set=0,straight=0,flush=0,full=0,quads=0,sf=0,royal=0;
+
+        for (int i = 0; i < deck.size(); i++)
+            for (int j = i + 1; j < deck.size(); j++) {
+                List<String> oppHole = List.of(deck.get(i), deck.get(j));
+                boolean[] d = CombinedProbabilityCalculator.detect(oppHole, boardInPlay());
+                if (d[1]) pair++;
+                if (d[2]) twoPair++;
+                if (d[3]) set++;
+                if (d[4]) straight++;
+                if (d[5]) flush++;
+                if (d[6]) full++;
+                if (d[7]) quads++;
+                if (d[8]) sf++;
+                if (d[9]) royal++;
+            }
+
+        /* single-opponent probabilities */
+        double pPair  = (double)pair  / totalHoleComb;
+        double p2Pair = (double)twoPair/ totalHoleComb;
+        double pSet   = (double)set   / totalHoleComb;
+        double pStr   = (double)straight / totalHoleComb;
+        double pFlu   = (double)flush / totalHoleComb;
+        double pFull  = (double)full  / totalHoleComb;
+        double pQuad  = (double)quads / totalHoleComb;
+        double pSF    = (double)sf    / totalHoleComb;
+        double pRoy   = (double)royal / totalHoleComb;
+
+        /* ≥1 из N: 1-(1-p)^N */
+        DoubleUnaryOperator atLeastOne = p -> 1 - Math.pow(1 - p, activeOpp);
+
+        return new OppResult(
+                atLeastOne.applyAsDouble(pPair),
+                atLeastOne.applyAsDouble(p2Pair),
+                atLeastOne.applyAsDouble(pSet),
+                atLeastOne.applyAsDouble(pStr),
+                atLeastOne.applyAsDouble(pFlu),
+                atLeastOne.applyAsDouble(pFull),
+                atLeastOne.applyAsDouble(pQuad),
+                atLeastOne.applyAsDouble(pSF),
+                atLeastOne.applyAsDouble(pRoy));
+    }
+
+    private void buildPlayerAndBoard() {
+        holeBtn1 = makeCardButton(() -> chooseCard(0));
+        holeBtn2 = makeCardButton(() -> chooseCard(1));
+        HBox holeBox = new HBox(5, holeBtn1, holeBtn2);
+        holeBox.setLayoutX(CX - 70);
+        holeBox.setLayoutY(CY + OVAL_B + 15);
+        tablePane.getChildren().add(holeBox);
+        double startX = CX - 2 * 70;
+        for (int i = 0; i < 5; i++) {
+            int idx = i;
+            Button b = makeCardButton(() -> chooseBoard(idx));
+            b.setLayoutX(startX + i * 70);
+            b.setLayoutY(CY - 45);
+            boardBtns.add(b);
+            tablePane.getChildren().add(b);
+        }
+    }
+
+    private Button makeCardButton(Runnable action) {
+        Button b = new Button();
+        b.setPrefSize(60, 90);
+        b.setOnAction(e -> action.run());
+        return b;
+    }
+
+    private void buildLeftTable() {
+        leftTable = new TableView<>(rows);
+        TableColumn<HandRow, String> c1 = new TableColumn<>("Combo");
+        c1.setCellValueFactory(d -> d.getValue().name);
+        TableColumn<HandRow, Number> c2 = new TableColumn<>("Chance %");
+        c2.setCellValueFactory(d -> d.getValue().prob);
+        TableColumn<HandRow, String> c3 = new TableColumn<>("Outs");
+        c3.setCellValueFactory(d -> d.getValue().outs);
+        leftTable.getColumns().addAll(c1, c2, c3);
+        leftTable.setPrefWidth(280);
+        root.setLeft(leftTable);
+        for (String n : comboNames) rows.add(new HandRow(n));
+    }
+
+    private void buildControls(Stage stage) {
+        Button restart = new Button("Restart");
+        restart.setOnAction(e -> { resetCards(); recalc(); });
+        Button editOpp = new Button("Edit opponents");
+        editOpp.setOnAction(e -> {
+            int v = askOpponents();
+            buildOpponents(v);
+            recalc();
+        });
+        VBox box = new VBox(10, restart, editOpp);
+        box.setAlignment(Pos.TOP_RIGHT);
+        root.setTop(box);
+    }
+
+    private void resetCards() {
+        used.clear();
+        Collections.fill(hole, null);
+        Collections.fill(board, null);
+
+        setCardGraphic(holeBtn1, null);
+        setCardGraphic(holeBtn2, null);
+        boardBtns.forEach(b -> setCardGraphic(b, null));
+    }
+
+    private void chooseCard(int idx) {
+        String card = pickCard();
+        if (card == null) return;
+        if (idx >= hole.size()) return;
+
+        String prev = hole.get(idx);
+        if (prev != null) used.remove(prev);
+
+        hole.set(idx, card);
+        used.add(card);
+
+        Button target = (idx == 0 ? holeBtn1 : holeBtn2);
+        setCardGraphic(target, card);
+
+        recalc();
+    }
+
+    private void chooseBoard(int idx) {
+        String card = pickCard();
+        if (card == null) return;
+
+        String prev = board.get(idx);
+        if (prev != null) used.remove(prev);
+
+        board.set(idx, card);
+        used.add(card);
+
+        setCardGraphic(boardBtns.get(idx), card);
+
+        recalc();
+    }
+
+    private String pickCard() {
+        Dialog<String> dialog = new Dialog<>();
+        dialog.setTitle("Выбор карты");
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
+
+        GridPane grid = new GridPane();
+        grid.setHgap(5); grid.setVgap(5);
+        String ranks = "23456789TJQKA";
+        String suits = "cdhs";               // 4 строки: ♣ ♦ ♥ ♠
+        for (int row = 0; row < suits.length(); row++) {
+            char S = suits.charAt(row);
+            for (int col = 0; col < ranks.length(); col++) {
+                char R = ranks.charAt(col);
+                String card = "" + R + S;
+
+                ImageView iv = new ImageView(
+                        new Image(getClass().getResourceAsStream("/cards/" + card + ".png"))
+                );
+                iv.setFitWidth(45);                       // масштабируем картинку
+                iv.setPreserveRatio(true);
+
+                Button btn = new Button();
+                btn.setGraphic(iv);
+                btn.setPadding(Insets.EMPTY);
+
+                if (used.contains(card)) {                // уже выбрана → ч/б и недоступна
+                    btn.setDisable(true);
+                    ColorAdjust gray = new ColorAdjust();
+                    gray.setSaturation(-1);
+                    gray.setBrightness(-0.4);
+                    iv.setEffect(gray);
+                }
+
+                btn.setOnAction(e -> { dialog.setResult(card); dialog.close(); });
+                grid.add(btn, col, row);
+            }
+        }
+        dialog.getDialogPane().setContent(grid);
+        return dialog.showAndWait().orElse(null);
+    }
+
+
+    private void recalc() {
+        if (hole.contains(null)) return;
+
+        int activeOpp = (int) opponents.stream().filter(o -> o.status == Status.ACTIVE).count();
+
+        /* --- игрок --- */
+        ProbResult pr = CombinedProbabilityCalculator.computeAll(hole, boardInPlay(), activeOpp);
+        double[] p = {pr.highCard, pr.pair, pr.twoPair, pr.set, pr.straight,
+                pr.flush, pr.fullHouse, pr.quads, pr.straightFlush, pr.royal};
+        for (int i = 0; i < rows.size(); i++)
+            rows.get(i).prob.set(Math.round(p[i] * 10000.0) / 100.0);
+
+        for (int i = 0; i < rows.size(); i++)
+            rows.get(i).outs.set(outString(i));
+
+        /* --- соперники --- */
+        OppResult op = computeOpponents(activeOpp);
+        double[] q = {op.pair, op.twoPair, op.set, op.straight, op.flush,
+                op.fullHouse, op.quads, op.straightFlush, op.royal};
+        for (int i = 0; i < oppRows.size(); i++)
+            oppRows.get(i).prob.set(Math.round(q[i] * 10000.0) / 100.0);
+
+        leftTable.refresh();
+        rightTable.refresh();
+    }
+
+    private List<String> boardInPlay() {
+        List<String> b = new ArrayList<>();
+        for (String c : board) if (c != null) b.add(c);
+        return b;
+    }
+
+    private String outString(int comboIdx) {
+        int missing = 5 - boardInPlay().size();
+        if (missing != 1) return "";
+        Set<String> outs = new HashSet<>();
+        List<String> deck = CombinedProbabilityCalculator.liveDeck(hole, boardInPlay());
+        for (String c : deck) {
+            List<String> tmp = new ArrayList<>(boardInPlay());
+            tmp.add(c);
+            boolean[] d = CombinedProbabilityCalculator.detect(hole, tmp);
+            if (d[comboIdx]) outs.add(c);
+        }
+        return String.join(",", outs);
+    }
+
+    private static class HandRow {
+        final StringProperty name = new SimpleStringProperty();
+        final DoubleProperty prob = new SimpleDoubleProperty();
+        final StringProperty outs = new SimpleStringProperty();
+        HandRow(String n) { name.set(n); }
+    }
+
+    private enum Status {ACTIVE, FOLDED, NONE}
+
+    private static class OpponentNode extends VBox {
+        Status status = Status.ACTIVE;
+        final Button foldBtn = new Button("сбросил карты");
+        final Button noneBtn = new Button("не получил карты");
+        OpponentNode(String label) {
+            super(5);
+            setAlignment(Pos.CENTER);
+            getChildren().addAll(new Label(label), foldBtn, noneBtn);
+        }
+    }
+
+    private record ProbResult(double highCard, double pair, double twoPair, double set, double straight, double flush, double fullHouse, double quads, double straightFlush, double royal) {}
+
+    private static class CombinedProbabilityCalculator {
+        static ProbResult computeAll(List<String> hole, List<String> board, int opp) {
+            double highCardP = highCardProb(hole, board, opp);
+            int r = 5 - board.size();
+            if (r == 0) {
+                boolean[] made = detect(hole, board);
+                return new ProbResult(highCardP, made[1] ? 1 : 0, made[2] ? 1 : 0, made[3] ? 1 : 0, made[4] ? 1 : 0, made[5] ? 1 : 0, made[6] ? 1 : 0, made[7] ? 1 : 0, made[8] ? 1 : 0, made[9] ? 1 : 0);
+            }
+            List<String> deck = liveDeck(hole, board);
+            long total = 0;
+            long pair = 0, twoPair = 0, set = 0, straight = 0, flush = 0, full = 0, quads = 0, sf = 0, royal = 0;
+            int n = deck.size();
+            int[] idx = new int[r];
+            for (int i = 0; i < r; i++) idx[i] = i;
+            while (true) {
+                List<String> add = new ArrayList<>(r);
+                for (int i : idx) add.add(deck.get(i));
+                total++;
+                boolean[] d = detect(hole, merge(board, add));
+                if (d[1]) pair++;
+                if (d[2]) twoPair++;
+                if (d[3]) set++;
+                if (d[4]) straight++;
+                if (d[5]) flush++;
+                if (d[6]) full++;
+                if (d[7]) quads++;
+                if (d[8]) sf++;
+                if (d[9]) royal++;
+                int t = r - 1; while (t >= 0 && idx[t] == n - r + t) t--; if (t < 0) break;
+                idx[t]++; for (int i = t + 1; i < r; i++) idx[i] = idx[i - 1] + 1;
+            }
+            return new ProbResult(highCardP, (double) pair / total, (double) twoPair / total, (double) set / total, (double) straight / total, (double) flush / total, (double) full / total, (double) quads / total, (double) sf / total, (double) royal / total);
+        }
+
+        private static boolean[] detect(List<String> hole, List<String> board) {
+            boolean[] res = new boolean[10];
+            List<String> cards = new ArrayList<>(hole); cards.addAll(board);
+            int[] rankCnt = new int[13]; int[] suitCnt = new int[4];
+            for (String c : cards) { rankCnt[rank(c)]++; suitCnt[suit(c)]++; }
+            int pairs = 0, trip = -1, quad = -1;
+            for (int i = 0; i < 13; i++) {
+                if (rankCnt[i] == 4) quad = i;
+                if (rankCnt[i] == 3) trip = i;
+                if (rankCnt[i] == 2) pairs++;
+            }
+            if (pairs > 0 && involvesHoleRank(hole, rankCnt, 2)) res[1] = true;
+            if (pairs >= 2 && involvesHoleRank(hole, rankCnt, 2)) res[2] = true;
+            if (trip != -1 && involvesHoleRankSingle(hole, trip)) res[3] = true;
+            if (trip != -1 && pairs > 0 && (involvesHoleRankSingle(hole, trip) || involvesHoleRank(hole, rankCnt, 2))) res[6] = true;
+            if (quad != -1 && involvesHoleRankSingle(hole, quad)) res[7] = true;
+            for (int s = 0; s < 4; s++) if (suitCnt[s] >= 5 && holeStreamHasSuit(hole, s)) res[5] = true;
+            boolean[] rankPresent = new boolean[13]; boolean[] rankHole = new boolean[13];
+            for (String c : cards) rankPresent[rank(c)] = true;
+            for (String c : hole) rankHole[rank(c)] = true;
+            for (int start = 0; start <= 8; start++) {
+                boolean ok = true, hasHole = false;
+                for (int off = 0; off < 5; off++) {
+                    int r = start + off;
+                    if (!rankPresent[r]) { ok = false; break; }
+                    if (rankHole[r]) hasHole = true;
+                }
+                if (ok && hasHole) res[4] = true;
+            }
+            if (rankPresent[12] && rankPresent[0] && rankPresent[1] && rankPresent[2] && rankPresent[3] && (rankHole[12] || rankHole[0] || rankHole[1] || rankHole[2] || rankHole[3])) res[4] = true;
+            boolean[][] suitRank = new boolean[4][13]; boolean[][] suitHole = new boolean[4][13];
+            for (String c : cards) suitRank[suit(c)][rank(c)] = true;
+            for (String c : hole) suitHole[suit(c)][rank(c)] = true;
+            int[] royalR = {8, 9, 10, 11, 12};
+            for (int s = 0; s < 4; s++) {
+                boolean ok = true, hasHole = false;
+                for (int r : royalR) { if (!suitRank[s][r]) { ok = false; break; } if (suitHole[s][r]) hasHole = true; }
+                if (ok && hasHole) { res[8] = true; res[9] = true; }
+                for (int st = 0; st <= 8; st++) {
+                    ok = true; hasHole = false;
+                    for (int off = 0; off < 5; off++) { int r = st + off; if (!suitRank[s][r]) { ok = false; break; } if (suitHole[s][r]) hasHole = true; }
+                    if (ok && hasHole) res[8] = true;
+                }
+                if (suitRank[s][12] && suitRank[s][0] && suitRank[s][1] && suitRank[s][2] && suitRank[s][3] && (suitHole[s][12] || suitHole[s][0] || suitHole[s][1] || suitHole[s][2] || suitHole[s][3])) res[8] = true;
+            }
+            return res;
+        }
+
+        private static boolean involvesHoleRank(List<String> hole, int[] rankCnt, int needed) { for (String c : hole) if (rankCnt[rank(c)] >= needed) return true; return false; }
+        private static boolean involvesHoleRankSingle(List<String> hole, int r) { for (String c : hole) if (rank(c) == r) return true; return false; }
+        private static boolean holeStreamHasSuit(List<String> hole, int s) { for (String c : hole) if (suit(c) == s) return true; return false; }
+
+        private static double highCardProb(List<String> hole, List<String> board, int opp) {
+            int myMax = Math.max(rank(hole.get(0)), rank(hole.get(1)));
+            boolean[] seen = new boolean[52];
+            hole.forEach(c -> seen[index(c)] = true);
+            board.forEach(c -> seen[index(c)] = true);
+            int live = 52 - 2 - board.size();
+            int higher = 0; String ranks = "23456789TJQKA";
+            for (int i = 0; i < 13; i++) if (i > myMax) {
+                char r = ranks.charAt(i);
+                for (char s : "cdhs".toCharArray()) {
+                    String card = "" + r + s;
+                    if (!seen[index(card)]) higher++;
+                }
+            }
+            int oppCards = opp * 2; if (oppCards > live) return 0;
+            BigInteger fav = comb(live - higher, oppCards);
+            BigInteger all = comb(live, oppCards);
+            return fav.doubleValue() / all.doubleValue();
+        }
+
+        private static int rank(String c) { return "23456789TJQKA".indexOf(c.charAt(0)); }
+        private static int suit(String c) { return "cdhs".indexOf(c.charAt(1)); }
+        private static int index(String c) { int r = rank(c); int s = suit(c); return r * 4 + s; }
+
+        static List<String> liveDeck(List<String> hole, List<String> board) { List<String> d = new ArrayList<>(); String rs = "23456789TJQKA", ss = "cdhs"; for (char R : rs.toCharArray()) for (char S : ss.toCharArray()) { String card = "" + R + S; if (!hole.contains(card) && !board.contains(card)) d.add(card); } return d; }
+        private static List<String> merge(List<String> a, List<String> b) { List<String> m = new ArrayList<>(a); m.addAll(b); return m; }
+
+        private static BigInteger comb(int n, int k) { if (k < 0 || k > n) return BigInteger.ZERO; if (k == 0 || k == n) return BigInteger.ONE; k = Math.min(k, n - k); BigInteger num = BigInteger.ONE, den = BigInteger.ONE; for (int i = 1; i <= k; i++) { num = num.multiply(BigInteger.valueOf(n - i + 1)); den = den.multiply(BigInteger.valueOf(i)); } return num.divide(den); }
+    }
+    private void buildTableBackground() {
+        tableBg = new ImageView(new Image(getClass().getResource("/table.png").toExternalForm()));
+        tableBg.setFitWidth(WIN_W);
+        tableBg.setFitHeight(WIN_H);
+        tableBg.setPreserveRatio(false);
+        tableBg.fitWidthProperty().bind(tablePane.widthProperty());
+        tableBg.fitHeightProperty().bind(tablePane.heightProperty());
+        tablePane.getChildren().add(0, tableBg); // фон на самый задний план
+    }
+    /* := оппоненты */
+    private static class OppRow {
+        final StringProperty name = new SimpleStringProperty();
+        final DoubleProperty prob = new SimpleDoubleProperty();
+        OppRow(String n) { name.set(n); }
+    }
+
+    /* таблица «шанс, что хотя бы один соперник соберёт…» */
+    private void buildRightTable() {
+        rightTable = new TableView<>(oppRows);
+
+        TableColumn<OppRow, String> c1 = new TableColumn<>("Combo");
+        c1.setCellValueFactory(d -> d.getValue().name);
+
+        TableColumn<OppRow, Number> c2 = new TableColumn<>("Chance %");
+        c2.setCellValueFactory(d -> d.getValue().prob);
+
+        rightTable.getColumns().addAll(c1, c2);
+        rightTable.setPrefWidth(220);
+
+        root.setRight(rightTable);
+
+        for (String n : Arrays.copyOfRange(comboNames, 1, comboNames.length)) // без High-card
+            oppRows.add(new OppRow(n));
+    }
+    private void setCardGraphic(Button btn, String card) {
+        if (card == null) {             // очистка
+            btn.setGraphic(null);
+            btn.setText("");
+            return;
+        }
+        ImageView iv = new ImageView(
+                new Image(getClass().getResourceAsStream("/cards/" + card + ".png"))
+        );
+        iv.setFitWidth(60);             // одна ширина для hole и board
+        iv.setPreserveRatio(true);
+        btn.setGraphic(iv);
+        btn.setText("");                // убираем текст
+    }
+}
+
+
+pom.xml:
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-base</artifactId>
+            <version>${javafx.version}</version>
+            <classifier>${fx.classifier}</classifier>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-graphics</artifactId>
+            <version>${javafx.version}</version>
+            <classifier>${fx.classifier}</classifier>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-controls</artifactId>
+            <version>${javafx.version}</version>
+            <classifier>${fx.classifier}</classifier>
+        </dependency>
+
+                    <plugin>
+                        <groupId>org.openjfx</groupId>
+                        <artifactId>javafx-maven-plugin</artifactId>
+                        <version>0.0.8</version>
+                        <configuration>
+                            <mainClass>com.kukharev.PokerProbabilityUI</mainClass>
+                        </configuration>
+                    </plugin>

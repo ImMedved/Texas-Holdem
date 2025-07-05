@@ -1,0 +1,234 @@
+/* ─── base layout ─────────────────────────────────────────── */
+html,
+body {
+    margin            : 0;
+    height            : 100%;
+    font-family       : system-ui, Arial, sans-serif;
+}
+
+/* landing / setup */
+#setup {
+    display           : flex;
+    align-items       : center;
+    justify-content   : center;
+    height            : 100%;
+    background        : #1e1e1e;
+    color             : #eee;
+    text-align        : center;
+    padding           : 24px;
+    box-sizing        : border-box;
+}
+
+#intro {
+    display           : flex;
+    flex-direction    : column;
+    gap               : 12px;
+    max-width         : 380px;
+}
+
+#intro input {
+    width             : 60px;
+    text-align        : center;
+}
+
+#intro button {
+    padding           : 6px 12px;
+    cursor            : pointer;
+}
+
+/* root: 25 % tables | 75 % table-canvas */
+#root {
+    display           : flex;
+    height            : 90%;
+}
+
+/* ─── left-side tables (25 %) */
+#panel-left {
+    flex              : 0 0 20%;
+    display           : flex;
+    flex-direction    : column;
+    gap               : 14px;
+    padding           : 14px;
+    box-sizing        : border-box;
+}
+
+/* odds tables */
+#panel-left table {
+    width             : 80%;
+    border-collapse   : collapse;
+    table-layout      : fixed;
+    font-size         : 0.85rem;
+}
+
+#panel-left th,
+#panel-left td {
+    border            : 1px solid #666;
+    padding           : 4px 6px;
+}
+
+#panel-left th:first-child,
+#panel-left td:first-child { width : 42%;  text-align : left;  }
+
+#panel-left th:nth-child(2),
+#panel-left td:nth-child(2) { width : 16%;  text-align : right; }
+
+#panel-left th:nth-child(3),
+#panel-left td:nth-child(3) {
+    width             : 42%;
+    text-align        : right;
+    overflow-x        : auto;
+    white-space       : nowrap;
+}
+
+/* ─── right-side poker table (80 %) */
+#table-area {
+    flex              : 1 1 80%;
+    display           : flex;
+    justify-content   : center;
+    align-items       : center;
+    position          : relative;
+}
+
+/* restart / edit buttons */
+#ctrls {
+    position          : absolute;
+    right             : 8px;
+    top               : 8px;
+    display           : flex;
+    flex-direction    : column;
+    gap               : 6px;
+}
+
+#ctrls button {
+    padding           : 6px 10px;
+    font-size         : 0.8rem;
+    border            : none;
+    border-radius     : 5px;
+    background        : #3d7cff;
+    color             : #fff;
+    cursor            : pointer;
+}
+
+#ctrls button:hover { background: #255bd6; }
+
+/* schematic oval table */
+#table {
+    position          : relative;
+    height            : 70vh;
+    aspect-ratio      : 2.2;
+    background        : radial-gradient(#007c3b 0%, #01592c 65%, #01391d 100%);
+    border            : 6px solid #47280d;
+    border-radius     : 50% / 40%;
+    box-shadow        : 0 0 18px rgba(0,0,0,0.6) inset;
+    transform: translateX(-5%);
+}
+
+/* board & hero hand */
+#board {
+    position          : absolute;
+    left              : 50%;
+    top               : 50%;
+    transform         : translate(-50%, -50%);
+    display           : flex;
+    gap               : 20px;
+}
+
+#hero-hand {
+    position          : absolute;
+    left              : 50%;
+    bottom            : 7%;
+    transform         : translate(-50%, 0);
+    display           : flex;
+    gap               : 20px;
+}
+
+/* slots */
+.slot {
+    width             : 80px;
+    height            : 125px;
+    border            : 2px dashed #aaa;
+    border-radius     : 10px;
+    background        : #ffffff08;
+    cursor            : pointer;
+}
+
+.slot img {
+    width             : 100%;
+    height            : 100%;
+    object-fit        : contain;
+}
+
+/* opponents */
+.seat {
+    position          : absolute;
+    transform         : translate(-50%, -50%);
+    text-align        : center;
+    font-size         : 0.8rem;
+}
+
+.avatar {
+    width             : 90px;
+    height            : 90px;
+    border-radius     : 50%;
+    object-fit        : cover;
+    margin-bottom     : 4px;
+    border            : 2px solid #ddd;
+}
+
+.seat button {
+    display           : block;
+    width             : 90px;
+    margin            : 3px auto;
+    font-size         : 0.8rem;
+    border            : none;
+    border-radius     : 5px;
+    background        : #ff5555;
+    color             : #fff;
+    cursor            : pointer;
+}
+
+.seat button.none { background: #777; }
+
+.seat button:disabled { opacity: 0.5; }
+
+/* ─── card-picker modal */
+#picker-backdrop[hidden] { display: none; }
+
+#picker-backdrop {
+    position          : fixed;
+    inset             : 0;
+    background        : #0006;
+    display           : grid;
+    place-items       : center;
+    z-index           : 100;
+}
+
+#picker {
+    background        : #1f1f1f;
+    padding           : 14px;
+    border-radius     : 8px;
+}
+
+#grid {
+    display           : grid;
+    grid-template-columns : repeat(13, 70px);
+    gap               : 6px;
+    margin-bottom     : 10px;
+}
+
+.card-btn {
+    width             : 70px;
+    height            : 105px;
+    padding           : 0;
+    border            : none;
+    cursor            : pointer;
+}
+
+.card-btn img {
+    width             : 100%;
+    height            : 100%;
+    object-fit        : contain;
+    border-radius     : 4px;
+}
+
+.card-btn.used img { filter: grayscale(1) brightness(0.4); }
