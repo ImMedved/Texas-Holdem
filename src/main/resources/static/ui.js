@@ -173,7 +173,7 @@ function renderPicker() {
 }
 
 const cardImg = code =>
-    Object.assign(new Image(), { src: `/cards/${code}.png` });
+    Object.assign(new Image(), { src: `./cards/${code}.png` });
 
 /* ----------   opponents   ------------------------------------ */
 function buildSeats(n) {
@@ -203,7 +203,7 @@ function buildSeats(n) {
         const noneBtn = div.querySelector('.none');
 
         const markLeft = () => {
-            avatar.src = '/user/leftUser.jpg';
+            avatar.src = './user/leftUser.jpg';
             foldBtn.disabled = true;
             noneBtn.disabled = true;
             recalc();
@@ -258,7 +258,7 @@ function recalc() {
 
     const activeOpp = Array
         .from(document.querySelectorAll('.seat .avatar'))
-        .filter(img => img.src.endsWith('onlineUser.jpg'))
+        .filter(img => img.src.endsWith('.onlineUser.jpg'))
         .length;
 
     const payload = {
@@ -267,7 +267,7 @@ function recalc() {
         activeOpp
     };
 
-    fetch('/api/probabilities', {
+    fetch('/poker/api/probabilities', {
         method  : 'POST',
         headers : { 'Content-Type': 'application/json' },
         body    : JSON.stringify(payload)
