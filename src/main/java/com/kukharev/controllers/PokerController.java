@@ -3,31 +3,35 @@ package com.kukharev.controllers;
 import com.kukharev.core.CombinedProbabilityCalculator;
 import com.kukharev.dto.ProbabilityDto;
 import com.kukharev.dto.RequestDto;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api")
 public class PokerController {
+    private static final Logger logger = LoggerFactory.getLogger(PokerController.class);
 
     @PostMapping("/probabilities")
     public ProbabilityDto calc(@RequestBody RequestDto req) {
+        logger.debug("Received request: hole={}, board={}, activeOpp={}", req.hole(), req.board(), req.activeOpp());
 
-        var hero = CombinedProbabilityCalculator.computeAll(
+        var hero = CombinedProbabilityCalculator.computeHero(
                 req.hole(), req.board(), req.activeOpp());
 
         var opp = CombinedProbabilityCalculator.computeOpponents(
                 req.hole(), req.board(), req.activeOpp());
 
         double[] heroArr = {
-                hero.highCard(), hero.pair(), hero.twoPair(), hero.set(),
-                hero.straight(), hero.flush(), hero.fullHouse(),
-                hero.quads(), hero.straightFlush(), hero.royal()
+                hero.highCardValue(), hero.pairValue(), hero.twoPairValue(), hero.setValue(),
+                hero.straightValue(), hero.flushValue(), hero.fullHouseValue(),
+                hero.quadsValue(), hero.straightFlushValue(), hero.royalValue()
         };
 
         double[] oppArr = {
-                opp.pair(), opp.twoPair(), opp.set(), opp.straight(),
-                opp.flush(), opp.fullHouse(), opp.quads(),
-                opp.straightFlush(), opp.royal()
+                opp.pairValue(), opp.twoPairValue(), opp.setValue(), opp.straightValue(),
+                opp.flushValue(), opp.fullHouseValue(), opp.quadsValue(),
+                opp.straightFlushValue(), opp.royalValue()
         };
 
         return new ProbabilityDto(heroArr, oppArr);
