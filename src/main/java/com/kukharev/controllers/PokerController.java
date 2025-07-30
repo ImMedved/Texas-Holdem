@@ -1,6 +1,6 @@
 package com.kukharev.controllers;
 
-import com.kukharev.core.CombinedProbabilityCalculator;
+import com.kukharev.core.ProbabilityCalculator;
 import com.kukharev.dto.ProbabilityDto;
 import com.kukharev.dto.RequestDto;
 import org.slf4j.Logger;
@@ -14,12 +14,12 @@ public class PokerController {
 
     @PostMapping("/probabilities")
     public ProbabilityDto calc(@RequestBody RequestDto req) {
-        logger.debug("Received request: hole={}, board={}, activeOpp={}", req.hole(), req.board(), req.activeOpp());
+        logger.info("Received request: hole={}, board={}, activeOpp={}", req.hole(), req.board(), req.activeOpp());
 
-        var hero = CombinedProbabilityCalculator.computeHero(
+        var hero = ProbabilityCalculator.computeHero(
                 req.hole(), req.board(), req.activeOpp());
 
-        var opp = CombinedProbabilityCalculator.computeOpponents(
+        var opp = ProbabilityCalculator.computeOpponents(
                 req.hole(), req.board(), req.activeOpp());
 
         double[] heroArr = {
@@ -33,7 +33,6 @@ public class PokerController {
                 opp.flushValue(), opp.fullHouseValue(), opp.quadsValue(),
                 opp.straightFlushValue(), opp.royalValue()
         };
-
         return new ProbabilityDto(heroArr, oppArr);
     }
 }
